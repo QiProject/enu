@@ -27,7 +27,8 @@ requires "nim >= 1.4.0",
          "https://github.com/dsrw/Nim#7633a23",
          "cligen 1.2.2",
          "json_serialization",
-         "print"
+         "print",
+         "synthesis"
 
 var
   godot_opts = "target=release_debug"

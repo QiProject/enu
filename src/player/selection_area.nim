@@ -1,7 +1,7 @@
 import ../../godotapi / [area, control]
 import godot
 import ".." / [core, globals, game, world/bot]
-import player
+import godot_player
 
 const signals = ["target_in", "target_out", "target_fire", "target_remove"]
 
