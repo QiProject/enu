@@ -1,19 +1,16 @@
-import macros, strformat, sugar
+import macros
 
 proc one() =
-  discard
+  echo "one"
 
-proc two(a: int) =
-  discard
+proc two(a: string) =
+  echo "two ", a
 
-macro check(thing: untyped): untyped =
-  parse_stmt &"bind_sym\"{thing}\""
-let a = (check(one), two,"k")
-let a1 = check(one)
-let a2 = check(one)
-let b1 = check(two)
-echo repr(a)
-#let b2 = check(two)
-#dump a1 == a2
-#dump a1 == b1
+var current_state = "one"
+template `->`(from_state: untyped, to_state: untyped) =
+  if current_state == from_state.ast_to_str:
+    current_state = to_state.ast_to_str
+    to_state
 
+one -> two("scott")
+echo current_state

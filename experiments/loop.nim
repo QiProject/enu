@@ -32,11 +32,13 @@ macro to(sig: untyped,  body: untyped): untyped =
         const this_state = "{name}"
     """
   result = parse_stmt(code)
+  #echo result.tree_repr
   result[0].find_child(it.kind == nnkStmtList).add(body)
 
-to patrol(a):
+to patrol(a = 2):
   #echo "a is ", a
   #echo "b is ", b
+  echo &"patrolling {a}"
   forward 10
   left()
 
@@ -49,10 +51,7 @@ to circle(distance = 5):
 to shoot:
   echo "fire_at(player)"
 
-patrol(6)
-follow()
-circle 4
-shoot()
+
 #[
 to attack:
   loop circle, follow, shoot:
@@ -73,51 +72,72 @@ to attack:
 #     while true:
 #       `body`
 
-# macro loop(states: untyped, body: untyped): untyped =
-#   echo "single: ", treeRepr(states)
-#   echo len(states)
-#   for state in states:
-#     echo treeRepr(state)
-#     echo len(states)
-#   quote do:
-#     while true:
-#       `body`
-macro `->`(from_state: untyped, to_state: untyped): untyped =
-  discard
+template loop(body: untyped) =
+  var current_state {.inject.}: string
+  while true:
+    body
 
-macro loop(args: varargs[untyped]): untyped =
-  if args.len == 0:
-    error "loop requires a body and/or states", args
+macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
+  template transition(from_nil, to_nil: bool, to_state_name: string, from_state, to_state, body: untyped) =
+    let from_state_name = from_state.ast_to_str
+    echo from_nil
+    echo to_state_name
+    echo from_nil.bool
+    echo current_state == ""
+    if (current_state == "") and from_nil.bool:
+      current_state = to_state_name
+      body
+      to_state
+      continue
+    if current_state == from_state_name:
+      current_state = to_state_name
+      if to_nil.bool:
+        body
+        break
+      else:
+        body
+        to_state
+  let
+    from_nil = from_state.kind == nnkNilLit
+    to_nil = to_state.kind == nnkNilLit
   var
-    args = args.to_seq
-    body: NimNode
-  if args[^1].kind == nnkStmtList:
-    echo "has body"
-    body = args[^1]
-    args = args[0..^2]
+    to_state_name: string
+    to_state = to_state
+  echo tree_repr(to_state)
+  var body = body
+  echo body.tree_repr
+  if body.kind == nnkNilLit:
+    body = new_stmt_list()
+  if not to_nil:
+    if to_state.kind == nnkIdent:
+      to_state_name = $to_state
+      to_state = new_call(to_state)
+    else:
+      to_state_name = $to_state[0]
   else:
-    echo "no body"
-  if args.len > 0:
-
-    let code = &"""
-      block:
-        let initial_state = "{args[0]}"
-        while true:
-          const placeholder = true
-    """
-    result = parse_stmt(code)
-    result[0][1][1][1].add(body)
-    echo result.tree_repr
-  else:
-    echo "no args"
-    result = parse_stmt("echo \"no args!\"")
+    to_state = new_stmt_list()
+  get_ast transition(from_nil, to_nil, to_state_name, from_state, to_state, body)
 
 var counter = 0
 
 expand_macros:
-  loop follow, shoot:
+  loop:
+    nil -> patrol()
     echo "first"
-    break
+    inc counter
+    shoot -> nil
+    if counter == 6:
+      patrol -> follow:
+        echo "followwwwwww"
+        counter = -2
+
+      follow -> circle(2):
+        counter = 2
+      circle -> shoot:
+        counter = -10
+    if counter == 10:
+      break
+
 
 
 #[
