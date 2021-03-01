@@ -5,6 +5,7 @@ type
   ActionResult = object
   Context = ref object
     managers: seq[proc:bool]
+    current_state_action: proc(): bool
 
 proc parse(sig: NimNode): (string, string) =
   var
@@ -36,7 +37,6 @@ macro to(sig: untyped,  body: untyped): untyped =
         const this_state = "{name}"
     """
   result = parse_stmt(code)
-  #echo result.tree_repr
   result[0].find_child(it.kind == nnkStmtList).add(body)
 
 to patrol(a = 2):
@@ -76,33 +76,52 @@ to attack:
 #     while true:
 #       `body`
 
+proc pump(ctx: Context): bool =
+  ## pump state machine. Returns true if state changes.
+  let last_action = ctx.current_state_action
+  var remove_after = ctx.managers.len - 1
+  for i, manager in ctx.managers:
+    if manager():
+      remove_after = i
+      break
+  ctx.managers = ctx.managers[0..remove_after]
+  return last_action != ctx.current_state_action
+
 template loop(body: untyped) =
-  var main_loop = false
-  var current_state {.inject.}: string
-  var current_state_action {.inject.}: proc(): bool
-  when not compiles(ctx):
-    let ctx {.inject.} = Context()
-    main_loop = true
-  proc manager(): bool =
-    body
-    if current_state_action != nil:
-      if current_state_action():
-        return true
-  while not manager():
-    discard
+  block:
+    var main_loop = false
+    var current_state {.inject.}: string
+
+    when not compiles(ctx):
+      let ctx {.inject.} = Context()
+      main_loop = true
+    proc manager(): bool =
+      result = true
+      while true:
+        body
+        return false
+
+
+    ctx.managers.add(manager)
+    if main_loop:
+      discard ctx.pump()
+      if ctx.current_state_action == nil:
+        ctx.current_state_action = proc(): bool =
+          manager()
+      while ctx.current_state_action != nil:
+        if ctx.current_state_action():
+          break
+        discard ctx.pump()
 
 macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
   template transition(from_state_name, to_state_name: string, from_state, to_state, body: untyped) =
     if current_state == from_state_name:
       current_state = to_state_name
       body
-      current_state_action = proc(): bool =
+      ctx.current_state_action = proc(): bool =
         to_state
         false
-      if current_state_action():
-        return true
-      echo to_state_name
-      return false
+      return true
 
   var
     to_state_name: string
@@ -125,7 +144,6 @@ macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
       to_state.add(ctx_arg)
     else:
       error "to_state must be an identifier or call", to_state
-
   else:
     to_state = new_nim_node(nnk_return_stmt)
     to_state.add bind_sym"true"
@@ -135,24 +153,30 @@ var counter = 0
 
 expand_macros:
   loop:
-    nil -> patrol:
-      echo "first"
+    echo "looping"
     inc counter
+    if counter == 6:
+      break
 
+  counter = 0
+  loop:
+    nil -> patrol:
+      echo "transition to patrol"
+    inc counter
     if counter == 6:
       patrol -> follow:
-        echo "followwwwwwww"
+        echo "transition to follow"
         counter = -2
 
       follow -> circle(2):
-        echo "circ"
+        echo "transition to circle"
         counter = 2
       circle -> shoot:
-        echo "shoot"
+        echo "transition to circle"
         counter = -10
       shoot -> nil
     else:
-      echo "nothing"
+      echo "no transition"
 
 
 
