@@ -3,6 +3,8 @@ import macros, strformat, strutils, sequtils, sugar
 
 type
   ActionResult = object
+  Context = ref object
+    managers: seq[proc:bool]
 
 proc parse(sig: NimNode): (string, string) =
   var
@@ -22,13 +24,15 @@ proc parse(sig: NimNode): (string, string) =
         args.add &"{arg}: auto"
       else:
         error "invalid signature", sig
+    if args.len > 0:
+      args.add ""
   return (name, args.join(", "))
 
 macro to(sig: untyped,  body: untyped): untyped =
   let
     (name, args) = sig.parse
     code = &"""
-      proc {name}({args}): ActionResult {{.discardable.}} =
+      proc {name}({args} ctx: Context = nil): ActionResult {{.discardable.}} =
         const this_state = "{name}"
     """
   result = parse_stmt(code)
@@ -73,70 +77,82 @@ to attack:
 #       `body`
 
 template loop(body: untyped) =
+  var main_loop = false
   var current_state {.inject.}: string
-  while true:
+  var current_state_action {.inject.}: proc(): bool
+  when not compiles(ctx):
+    let ctx {.inject.} = Context()
+    main_loop = true
+  proc manager(): bool =
     body
+    if current_state_action != nil:
+      if current_state_action():
+        return true
+  while not manager():
+    discard
 
 macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
-  template transition(from_nil, to_nil: bool, to_state_name: string, from_state, to_state, body: untyped) =
-    let from_state_name = from_state.ast_to_str
-    echo from_nil
-    echo to_state_name
-    echo from_nil.bool
-    echo current_state == ""
-    if (current_state == "") and from_nil.bool:
-      current_state = to_state_name
-      body
-      to_state
-      continue
+  template transition(from_state_name, to_state_name: string, from_state, to_state, body: untyped) =
     if current_state == from_state_name:
       current_state = to_state_name
-      if to_nil.bool:
-        body
-        break
-      else:
-        body
+      body
+      current_state_action = proc(): bool =
         to_state
-  let
-    from_nil = from_state.kind == nnkNilLit
-    to_nil = to_state.kind == nnkNilLit
+        false
+      if current_state_action():
+        return true
+      echo to_state_name
+      return false
+
   var
     to_state_name: string
+    from_state_name: string
     to_state = to_state
-  echo tree_repr(to_state)
   var body = body
-  echo body.tree_repr
   if body.kind == nnkNilLit:
     body = new_stmt_list()
-  if not to_nil:
+  if from_state.kind != nnkNilLit:
+    from_state_name = $from_state
+  if to_state.kind != nnkNilLit:
+    let ctx_arg = new_nim_node(nnkExprEqExpr)
+    ctx_arg.add(ident"ctx")
+    ctx_arg.add(ident"ctx")
     if to_state.kind == nnkIdent:
       to_state_name = $to_state
-      to_state = new_call(to_state)
-    else:
+      to_state = new_call(to_state, ctx_arg) #
+    elif to_state.kind == nnkCall:
       to_state_name = $to_state[0]
+      to_state.add(ctx_arg)
+    else:
+      error "to_state must be an identifier or call", to_state
+
   else:
-    to_state = new_stmt_list()
-  get_ast transition(from_nil, to_nil, to_state_name, from_state, to_state, body)
+    to_state = new_nim_node(nnk_return_stmt)
+    to_state.add bind_sym"true"
+  get_ast transition(from_state_name, to_state_name, from_state, to_state, body)
 
 var counter = 0
 
 expand_macros:
   loop:
-    nil -> patrol()
-    echo "first"
+    nil -> patrol:
+      echo "first"
     inc counter
-    shoot -> nil
+
     if counter == 6:
       patrol -> follow:
-        echo "followwwwwww"
+        echo "followwwwwwww"
         counter = -2
 
       follow -> circle(2):
+        echo "circ"
         counter = 2
       circle -> shoot:
+        echo "shoot"
         counter = -10
-    if counter == 10:
-      break
+      shoot -> nil
+    else:
+      echo "nothing"
 
 
 
