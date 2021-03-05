@@ -4,8 +4,12 @@ import macros, strformat, strutils, sequtils, sugar
 type
   ActionResult = object
   Context = ref object
-    managers: seq[proc:bool]
+    managers: seq[proc(done: bool):bool]
     current_state_action: proc(): bool
+    depth: int
+    done: bool
+  Halt = object of CatchableError
+    manager: proc(done: bool):bool
 
 proc parse(sig: NimNode): (string, string) =
   var
@@ -40,20 +44,18 @@ macro to(sig: untyped,  body: untyped): untyped =
   result[0].find_child(it.kind == nnkStmtList).add(body)
 
 to patrol(a = 2):
-  #echo "a is ", a
-  #echo "b is ", b
   echo &"patrolling {a}"
   forward 10
   left()
 
 to follow:
- forward()
+ echo "follow"
 
 to circle(distance = 5):
-  left 2
+  echo "circle"
 
-to shoot:
-  echo "fire_at(player)"
+to shoot(name = "nothing"):
+  echo "fire_at(player) ", name
 
 
 #[
@@ -76,15 +78,24 @@ to attack:
 #     while true:
 #       `body`
 
-proc pump(ctx: Context): bool =
-  ## pump state machine. Returns true if state changes.
+proc advance(ctx: Context): bool =
+  ## advance state machine. Returns true if state changes.
   let last_action = ctx.current_state_action
-  var remove_after = ctx.managers.len - 1
-  for i, manager in ctx.managers:
-    if manager():
-      remove_after = i
+  var managers = ctx.managers
+  var done = ctx.done
+  ctx.done = false
+  for i, manager in managers:
+    var manager_done = false
+    if i == managers.len - 1:
+      manager_done = done
+      echo "setting done in manager ", i
+    ctx.done = false
+    try:
+      discard manager(manager_done)
+    except Halt as h:
+      echo "halt caught ", i
+      ctx.managers = ctx.managers[0..i]
       break
-  ctx.managers = ctx.managers[0..remove_after]
   return last_action != ctx.current_state_action
 
 template loop(body: untyped) =
@@ -95,33 +106,39 @@ template loop(body: untyped) =
     when not compiles(ctx):
       let ctx {.inject.} = Context()
       main_loop = true
-    proc manager(): bool =
-      result = true
+    else:
+      inc ctx.depth
+    proc manager(done: bool): bool =
+      let done {.inject.} = done
       while true:
         body
-        return false
-
-
+        return true
     ctx.managers.add(manager)
     if main_loop:
-      discard ctx.pump()
+      discard ctx.advance()
       if ctx.current_state_action == nil:
-        ctx.current_state_action = proc(): bool =
-          manager()
-      while ctx.current_state_action != nil:
-        if ctx.current_state_action():
-          break
-        discard ctx.pump()
+        # regular loop.
+        var looping = true
+        while manager(false):
+          discard
+      else:
+        while ctx.current_state_action != nil:
+          if ctx.current_state_action():
+            break
+          ctx.done = true
+          discard ctx.advance()
 
 macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
   template transition(from_state_name, to_state_name: string, from_state, to_state, body: untyped) =
     if current_state == from_state_name:
       current_state = to_state_name
       body
-      ctx.current_state_action = proc(): bool =
+      proc action(): bool =
         to_state
         false
-      return true
+      ctx.current_state_action = action
+      echo "raising"
+      raise (ref Halt)(manager: manager)
 
   var
     to_state_name: string
@@ -151,32 +168,47 @@ macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
 
 var counter = 0
 
-expand_macros:
-  loop:
-    echo "looping"
-    inc counter
-    if counter == 6:
-      break
+to lookout:
+  var counter = 0
 
-  counter = 0
   loop:
-    nil -> patrol:
+    echo "lookout loop ", done
+    nil -> follow:
+      echo "subloop follow"
+    inc counter
+    if counter == 2:
+      follow -> shoot("subloop"):
+        echo "subloop shoot"
+    if counter == 6:
+      counter = 0
+      shoot -> nil:
+        echo "subloop done"
+
+loop:
+  echo "looping"
+  inc counter
+  if counter == 6:
+    break
+
+counter = 0
+loop:
+  echo "done: ", done
+  nil -> lookout:
+    echo "transition to lookout"
+  inc counter
+  if done:
+    lookout -> patrol:
       echo "transition to patrol"
-    inc counter
-    if counter == 6:
-      patrol -> follow:
-        echo "transition to follow"
-        counter = -2
-
-      follow -> circle(2):
-        echo "transition to circle"
-        counter = 2
-      circle -> shoot:
-        echo "transition to circle"
-        counter = -10
-      shoot -> nil
-    else:
-      echo "no transition"
+      counter = -2
+  if counter == 16:
+    patrol -> circle(2):
+      echo "transition to circle"
+      counter = 2
+    circle -> shoot:
+      echo "transition to shoot"
+      counter = -10
+    shoot -> nil:
+      echo "mainloop done"
 
 
 
