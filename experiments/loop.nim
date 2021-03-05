@@ -4,11 +4,11 @@ import macros, strformat, strutils, sequtils, sugar
 type
   ActionResult = object
   Context = ref object
-    managers: seq[proc():bool]
-    current_state_action: proc(): bool
+    managers: seq[proc:bool]
+    current_action: proc()
     depth: int
   Halt = object of CatchableError
-    manager: proc():bool
+    manager: proc:bool
 
 proc parse(sig: NimNode): (string, string) =
   var
@@ -83,14 +83,12 @@ proc advance(ctx: Context): bool =
   for i, manager in managers:
     try:
       discard manager()
-    except Halt as h:
-      echo "halt caught ", i
+    except Halt:
       ctx.managers = ctx.managers[0..i]
-      if ctx.current_state_action == nil:
-        echo "removing manager ", i
+      if ctx.current_action == nil and manager in ctx.managers:
         ctx.managers.delete ctx.managers.find(manager)
-  result = ctx.current_state_action != nil
-  echo "result = ", result
+      break
+  result = ctx.current_action != nil
 
 template loop(body: untyped) =
   block:
@@ -107,24 +105,15 @@ template loop(body: untyped) =
         body
         return true
     ctx.managers.add(manager)
-    if main_loop:
-      discard ctx.advance()
-      if ctx.current_state_action == nil:
+    var looping = ctx.advance()
+    if main_loop and ctx.current_action == nil:
         # regular loop.
         while manager():
           discard
-      else:
-        var looping = true
-        while looping:
-          done = false
-          discard ctx.current_state_action()
-          done = true
-          looping = ctx.advance()
     else:
-      var looping = ctx.advance()
       while looping:
         done = false
-        discard ctx.current_state_action()
+        ctx.current_action()
         done = true
         looping = ctx.advance()
 
@@ -133,18 +122,12 @@ macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
     if current_state == from_state_name:
       current_state = to_state_name
       body
-      proc action(): bool =
-        try:
-          done = false
-          to_state
-          false
-        finally:
-          done = true
+      proc action() =
+        to_state
       if to_state_name != "":
-        ctx.current_state_action = action
+        ctx.current_action = action
       else:
-        ctx.current_state_action = nil
-      echo "raising"
+        ctx.current_action = nil
       raise (ref Halt)(manager: manager)
 
   var
@@ -169,8 +152,7 @@ macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
     else:
       error "to_state must be an identifier or call", to_state
   else:
-    to_state = new_nim_node(nnk_return_stmt)
-    to_state.add bind_sym"true"
+    to_state = new_stmt_list()
   get_ast transition(from_state_name, to_state_name, from_state, to_state, body)
 
 var counter = 0
@@ -199,21 +181,20 @@ loop:
 
 counter = 0
 loop:
-  echo "current_state ", current_state, " ", done
   nil -> lookout:
     echo "transition to lookout"
   inc counter
   if done:
     lookout -> patrol:
       echo "transition to patrol"
-      counter = -2
-  if counter == 16:
+      counter = 0
+  if counter == 3:
     patrol -> circle(2):
       echo "transition to circle"
-      counter = 2
+      counter = 0
     circle -> shoot:
       echo "transition to shoot"
-      counter = -10
+      counter = 0
     shoot -> nil:
       echo "mainloop done"
 
