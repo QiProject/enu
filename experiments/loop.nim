@@ -4,12 +4,11 @@ import macros, strformat, strutils, sequtils, sugar
 type
   ActionResult = object
   Context = ref object
-    managers: seq[proc(done: bool):bool]
+    managers: seq[proc():bool]
     current_state_action: proc(): bool
     depth: int
-    done: bool
   Halt = object of CatchableError
-    manager: proc(done: bool):bool
+    manager: proc():bool
 
 proc parse(sig: NimNode): (string, string) =
   var
@@ -80,36 +79,30 @@ to attack:
 
 proc advance(ctx: Context): bool =
   ## advance state machine. Returns true if state changes.
-  let last_action = ctx.current_state_action
   var managers = ctx.managers
-  var done = ctx.done
-  ctx.done = false
   for i, manager in managers:
-    var manager_done = false
-    if i == managers.len - 1:
-      manager_done = done
-      echo "setting done in manager ", i
-    ctx.done = false
     try:
-      discard manager(manager_done)
+      discard manager()
     except Halt as h:
       echo "halt caught ", i
       ctx.managers = ctx.managers[0..i]
-      break
-  return last_action != ctx.current_state_action
+      if ctx.current_state_action == nil:
+        echo "removing manager ", i
+        ctx.managers.delete ctx.managers.find(manager)
+  result = ctx.current_state_action != nil
+  echo "result = ", result
 
 template loop(body: untyped) =
   block:
     var main_loop = false
     var current_state {.inject.}: string
-
+    var done {.inject.} = false
     when not compiles(ctx):
       let ctx {.inject.} = Context()
       main_loop = true
     else:
       inc ctx.depth
-    proc manager(done: bool): bool =
-      let done {.inject.} = done
+    proc manager(): bool =
       while true:
         body
         return true
@@ -118,15 +111,22 @@ template loop(body: untyped) =
       discard ctx.advance()
       if ctx.current_state_action == nil:
         # regular loop.
-        var looping = true
-        while manager(false):
+        while manager():
           discard
       else:
-        while ctx.current_state_action != nil:
-          if ctx.current_state_action():
-            break
-          ctx.done = true
-          discard ctx.advance()
+        var looping = true
+        while looping:
+          done = false
+          discard ctx.current_state_action()
+          done = true
+          looping = ctx.advance()
+    else:
+      var looping = ctx.advance()
+      while looping:
+        done = false
+        discard ctx.current_state_action()
+        done = true
+        looping = ctx.advance()
 
 macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
   template transition(from_state_name, to_state_name: string, from_state, to_state, body: untyped) =
@@ -134,9 +134,16 @@ macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
       current_state = to_state_name
       body
       proc action(): bool =
-        to_state
-        false
-      ctx.current_state_action = action
+        try:
+          done = false
+          to_state
+          false
+        finally:
+          done = true
+      if to_state_name != "":
+        ctx.current_state_action = action
+      else:
+        ctx.current_state_action = nil
       echo "raising"
       raise (ref Halt)(manager: manager)
 
@@ -172,7 +179,6 @@ to lookout:
   var counter = 0
 
   loop:
-    echo "lookout loop ", done
     nil -> follow:
       echo "subloop follow"
     inc counter
@@ -183,6 +189,7 @@ to lookout:
       counter = 0
       shoot -> nil:
         echo "subloop done"
+  echo "lookout done"
 
 loop:
   echo "looping"
@@ -192,7 +199,7 @@ loop:
 
 counter = 0
 loop:
-  echo "done: ", done
+  echo "current_state ", current_state, " ", done
   nil -> lookout:
     echo "transition to lookout"
   inc counter
