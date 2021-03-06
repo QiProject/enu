@@ -180,6 +180,7 @@ loop:
     break
 
 counter = 0
+var looking_out = false
 loop:
   nil -> lookout:
     echo "transition to lookout"
@@ -195,10 +196,13 @@ loop:
     circle -> shoot:
       echo "transition to shoot"
       counter = 0
-    shoot -> nil:
-      echo "mainloop done"
-
-
+    shoot -> lookout:
+      counter = 0
+      looking_out = true
+      echo "lookout 2"
+    if looking_out:
+      lookout -> nil:
+        echo "mainloop done"
 
 #[
   if counter == 2:
