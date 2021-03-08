@@ -4,11 +4,12 @@ import macros, strformat, strutils, sequtils, sugar
 type
   ActionResult = object
   Context = ref object
-    managers: seq[proc:bool]
-    current_action: proc()
-    depth: int
+    stack: seq[Frame]
+  Frame = ref object
+    manager: proc(active: bool):bool
+    action: proc()
   Halt = object of CatchableError
-    manager: proc:bool
+    manager: proc(active: bool):bool
 
 proc parse(sig: NimNode): (string, string) =
   var
@@ -42,21 +43,6 @@ macro to(sig: untyped,  body: untyped): untyped =
   result = parse_stmt(code)
   result[0].find_child(it.kind == nnkStmtList).add(body)
 
-to patrol(a = 2):
-  echo &"patrolling {a}"
-  forward 10
-  left()
-
-to follow:
- echo "follow"
-
-to circle(distance = 5):
-  echo "circle"
-
-to shoot(name = "nothing"):
-  echo "fire_at(player) ", name
-
-
 #[
 to attack:
   loop circle, follow, shoot:
@@ -77,45 +63,55 @@ to attack:
 #     while true:
 #       `body`
 
-proc advance(ctx: Context): bool =
+proc advance(ctx: Context, frame: Frame): bool =
   ## advance state machine. Returns true if state changes.
-  var managers = ctx.managers
-  for i, manager in managers:
+  var stack = ctx.stack
+  for i, stackframe in stack:
     try:
-      discard manager()
-    except Halt:
-      ctx.managers = ctx.managers[0..i]
-      if ctx.current_action == nil and manager in ctx.managers:
-        ctx.managers.delete ctx.managers.find(manager)
+      discard stackframe.manager(i + 1 == stack.len)
+    except Halt as h:
+      ctx.stack = ctx.stack[0..i]
+      if stackframe.action == nil and stackframe in ctx.stack:
+        ctx.stack.delete ctx.stack.find(stackframe)
+      if frame != stackframe:
+        raise h
       break
-  result = ctx.current_action != nil
+  result = frame.action != nil
 
 template loop(body: untyped) =
   block:
     var main_loop = false
     var current_state {.inject.}: string
     var done {.inject.} = false
+    var frame {.inject.} = Frame()
     when not compiles(ctx):
       let ctx {.inject.} = Context()
       main_loop = true
-    else:
-      inc ctx.depth
-    proc manager(): bool =
+
+    proc manager(active: bool): bool =
+      let active {.inject.} = active
       while true:
         body
         return true
-    ctx.managers.add(manager)
-    var looping = ctx.advance()
-    if main_loop and ctx.current_action == nil:
-        # regular loop.
-        while manager():
+    frame.manager = manager
+    ctx.stack.add frame
+    var looping = ctx.advance(frame)
+    if main_loop and not looping:
+        # regular while loop.
+        while manager(true):
           discard
     else:
       while looping:
         done = false
-        ctx.current_action()
+        try:
+          frame.action()
+        except Halt as h:
+          #if h.manager == manager:
+          break
+          #else:
+          #  raise h
         done = true
-        looping = ctx.advance()
+        looping = ctx.advance(frame)
 
 macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
   template transition(from_state_name, to_state_name: string, from_state, to_state, body: untyped) =
@@ -125,9 +121,9 @@ macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
       proc action() =
         to_state
       if to_state_name != "":
-        ctx.current_action = action
+        frame.action = action
       else:
-        ctx.current_action = nil
+        frame.action = nil
       raise (ref Halt)(manager: manager)
 
   var
@@ -155,24 +151,52 @@ macro `->`(from_state: untyped, to_state: untyped, body: untyped = nil) =
     to_state = new_stmt_list()
   get_ast transition(from_state_name, to_state_name, from_state, to_state, body)
 
-var counter = 0
+to action_a(name: string):
+  echo "action_a ", name
 
-to lookout:
-  var counter = 0
+to action_b(name: string):
+  echo "action_b ", name
+
+to action_c(name: string):
+  echo "action_c ", name
+
+to action_d(name: string):
+  echo "action_d ", name
+
+to action_e(name: string):
+  echo "action_e ", name
+
+to loop_b:
+  var
+    counter = 0
+    name = "loop_b"
+  loop:
+    inc counter
+    nil -> action_c(name)
+    if counter == 5:
+      action_d -> action_e(name)
+    if counter == 10:
+      action_e -> action_d(name)
+    if counter == 15:
+      counter = 0
+
+to loop_a:
+  var
+    counter = 0
+    name = "loop_a"
 
   loop:
-    nil -> follow:
-      echo "subloop follow"
+    nil -> action_b(name)
     inc counter
     if counter == 2:
-      follow -> shoot("subloop"):
-        echo "subloop shoot"
+      action_b -> loop_b:
+        counter = -20
+      loop_b -> action_c(name)
     if counter == 6:
-      counter = 0
-      shoot -> nil:
-        echo "subloop done"
-  echo "lookout done"
+      action_c -> nil
+  echo name, " done ", counter
 
+var counter = 0
 loop:
   echo "looping"
   inc counter
@@ -180,29 +204,25 @@ loop:
     break
 
 counter = 0
-var looking_out = false
+var loop_a_finished = false
 loop:
-  nil -> lookout:
-    echo "transition to lookout"
+  var name = "loop_main"
+  nil -> loop_a
   inc counter
-  if done:
-    lookout -> patrol:
-      echo "transition to patrol"
+  if not loop_a_finished and done:
+    loop_a -> action_a(name):
       counter = 0
   if counter == 3:
-    patrol -> circle(2):
-      echo "transition to circle"
+    action_a -> action_b(name):
       counter = 0
-    circle -> shoot:
-      echo "transition to shoot"
+    action_b -> action_c(name):
       counter = 0
-    shoot -> lookout:
+    action_c -> loop_a:
       counter = 0
-      looking_out = true
-      echo "lookout 2"
-    if looking_out:
-      lookout -> nil:
-        echo "mainloop done"
+      loop_a_finished = true
+  if loop_a_finished and counter == 70:
+    loop_a -> nil:
+      echo "mainloop done ", counter
 
 #[
   if counter == 2:
